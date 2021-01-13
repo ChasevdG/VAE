@@ -37,7 +37,7 @@ class Planner(torch.nn.Module):
         def forward(self, x):
             return F.relu(self.c1(x))
 
-    def __init__(self, layers=[16, 32, 64, 128], n_class=1, kernel_size=3, use_skip=True):
+    def __init__(self, layers=[16, 32, 64, 128], n_class=1, kernel_size=3, use_skip=True, n_latent = 1):
         
         super().__init__()
         self.input_mean = torch.Tensor([0.3521554, 0.30068502, 0.28527516])
@@ -50,6 +50,11 @@ class Planner(torch.nn.Module):
         for i, l in enumerate(layers):
             self.add_module('conv%d' % i, self.Block(c, l, kernel_size, 2))
             c = l
+            
+        self.means = torch.nn.Conv2d(c, n_latent, kernel_size=kernel_size, padding=kernel_size // 2)
+        self.vars = torch.nn.Conv2d(c, n_latent, kernel_size=kernel_size, padding=kernel_size // 2)
+        c = n_latent
+        
         # Produce lower res output
         for i, l in list(enumerate(layers))[::-1]:
             self.add_module('upconv%d' % i, self.UpBlock(c, l, kernel_size, 2))
@@ -66,6 +71,7 @@ class Planner(torch.nn.Module):
         @img: (B,3,96,128)
         return (B,2)
         """
+        
         x = img
         
         z = (x - self.input_mean[None, :, None, None].to(x.device)) / self.input_std[None, :, None, None].to(x.device)
@@ -74,7 +80,14 @@ class Planner(torch.nn.Module):
             # Add all the information required for skip connections
             up_activation.append(z)
             z = self._modules['conv%d' % i](z)
-
+            
+        means = self.means(z)
+        var = self.vars(z)
+        stds = np.sqrt(np.exp(-var))
+        
+        #
+        Sample from Normal
+        #
         for i in reversed(range(self.n_conv)):
             z = self._modules['upconv%d' % i](z)
             # Fix the padding
